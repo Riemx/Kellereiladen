@@ -7,7 +7,7 @@ import socket
 
 START_URL = "https://www.kellereiladen.de/"
 ALLOWED_HOST = "www.kellereiladen.de"
-MAX_PAGES = 5000
+MAX_PAGES = 10000
 TIMEOUT = 15
 HEADERS = {"User-Agent": "SitemapBot/1.0 (+https://sitemap.kellereiladen.de)"}
 
