@@ -2,7 +2,7 @@
   "name": "kellereiladen-sitemaps",
   "private": true,
   "dependencies": {
-    "puppeteer": "^22.9.0",
+    "puppeteer": "^24.16.1",
     "robots-parser": "^3.0.1"
   },
   "scripts": {
