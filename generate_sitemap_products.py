@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Crawlt www.kellereiladen.de, extrahiert Produktseiten (Bücher) und schreibt sitemap_products.xml.
+Crawlt www.kellereiladen.de, extrahiert Produktseiten (Bücher) und schreibt sitemap_products*.xml.
 - Respektiert robots.txt
 - Folgt nur internen Links (Host-Filter)
 - Heuristiken: /shop/item/..., Slugs mit -978..., sowie Fallback über Seiteninhalt (ISBN/Titelnr)
+- Aufgeteilt in Chunks à 45.000 URLs (unter 50.000/50 MB Limit)
 """
 
 import datetime
@@ -16,17 +17,16 @@ import urllib.robotparser
 from collections import deque
 import re
 from lxml import html
-import sys
 import time
 from typing import Set, List
 from pathlib import Path
 
-START_URL = "https://www.kellereiladen.de/"
+START_URL   = "https://www.kellereiladen.de/"
 ALLOWED_HOST = "www.kellereiladen.de"
-USER_AGENT = "KellereiladenSitemapBot/1.0 (+https://sitemap.kellereiladen.de)"
-TIMEOUT = 15
-CRAWL_DELAY = 0.15    # Sekunden
-MAX_PAGES = 20000     # Sicherheitslimit
+USER_AGENT  = "KellereiladenSitemapBot/1.0 (+https://sitemap.kellereiladen.de)"
+TIMEOUT     = 15
+CRAWL_DELAY = 0.15     # Sekunden, bei Bedarf senken (robots.txt beachten!)
+MAX_PAGES   = 200000   # vorher 20000
 
 def fetch(url):
     parsed = urllib.parse.urlsplit(url)
@@ -73,10 +73,10 @@ def extract_links(content: bytes) -> Set[str]:
     except Exception:
         return set()
 
-RE_ITEM_PATH = re.compile(r"^/shop/item/\d{9,13}/", re.I)
-RE_ISBN_TAIL = re.compile(r"/[a-z0-9-]+-\d{10,13}$", re.I)         # slug-978...
-RE_CAT_ISBN_TAIL = re.compile(r"^/[^/]+/[a-z0-9-]+-\d{10,13}$", re.I)
-RE_CANONICAL = re.compile(rb'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', re.I)
+RE_ITEM_PATH      = re.compile(r"^/shop/item/\d{9,13}/", re.I)
+RE_ISBN_TAIL      = re.compile(r"/[a-z0-9-]+-\d{10,13}$", re.I)          # slug-978...
+RE_CAT_ISBN_TAIL  = re.compile(r"^/[^/]+/[a-z0-9-]+-\d{10,13}$", re.I)   # /buecher-.../slug-978...
+RE_CANONICAL_TAG  = re.compile(rb'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', re.I)
 
 def looks_like_product(url_path: str, content: bytes) -> bool:
     if RE_ITEM_PATH.search(url_path) or RE_CAT_ISBN_TAIL.search(url_path) or RE_ISBN_TAIL.search(url_path):
@@ -93,7 +93,7 @@ def looks_like_product(url_path: str, content: bytes) -> bool:
     return False
 
 def resolve_canonical(url: str, content: bytes) -> str:
-    m = RE_CANONICAL.search(content)
+    m = RE_CANONICAL_TAG.search(content)
     if not m:
         return url
     href = m.group(1).decode("utf-8", "ignore")
@@ -138,7 +138,7 @@ def crawl(start: str):
         time.sleep(CRAWL_DELAY)
     return sorted(products)
 
-def write_sitemaps(urls: List[str], base_name="sitemap_products", max_urls=50000):
+def write_sitemaps(urls: List[str], base_name="sitemap_products", max_urls=45000):  # vorher 50000
     today = datetime.date.today().isoformat()
     def write_chunk(chunk_urls, idx=None):
         name = f"{base_name}.xml" if idx is None else f"{base_name}_{idx}.xml"
@@ -198,6 +198,6 @@ def ensure_index_has_products(index_path="sitemap_index.xml", product_files=None
 if __name__ == "__main__":
     urls = crawl(START_URL)
     urls = sorted(set(urls))
-    files = write_sitemaps(urls, base_name="sitemap_products", max_urls=50000)
+    files = write_sitemaps(urls, base_name="sitemap_products", max_urls=45000)  # Chunks à 45k
     ensure_index_has_products(product_files=[Path(p).name for p in files])
     print(f"Products discovered: {len(urls)}; Files: {', '.join(files)}")
