@@ -173,8 +173,8 @@ async function main() {
 
   for (const s of seeds) queue.push({ url: s, depth: 0 });
 
-  const browser = await puppeteer.launch({ headless: "new", args: ["--no-sandbox", "--disable-setuid-sandbox"] });
-  const context = await browser.createIncognitoBrowserContext();
+  const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox", "--incognito"] });
+  const context = await browser.createBrowserContext();
 
   let active = 0, processed = 0, stop = false;
 
