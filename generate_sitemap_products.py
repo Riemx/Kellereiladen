@@ -4,9 +4,12 @@
 Crawlt www.kellereiladen.de, erzeugt sitemap_products*.xml.
 - Respektiert robots.txt
 - Nur interne Links
-- Produkt-Erkennung per URL-Muster & Inhalt (ISBN/Titelnr)
+- Produkt-Erkennung für:
+  1) /slug-978...  (z. B. /die-assistentin-9783498007706)
+  2) /buecher/slug-978...  (z. B. /buecher/the-american-...-9783492064804)
+  3) /978...  (nur ISBN, z. B. /9783498007706)
 - Splits à 45.000 URLs
-- NEU: Cache + Gnadenfrist (RETAIN_DAYS), damit veraltete Seiten sauber auslaufen
+- Cache + Gnadenfrist (RETAIN_DAYS), damit temporär verschwundene Seiten nicht sofort rausfliegen
 """
 
 import datetime
@@ -15,7 +18,7 @@ import ssl
 import urllib.parse
 import urllib.robotparser
 from collections import deque
-import re, time, json, os
+import re, time, json
 from lxml import html
 from pathlib import Path
 from typing import Set, List, Dict, Tuple
@@ -27,13 +30,15 @@ TIMEOUT      = 15
 CRAWL_DELAY  = 0.20
 MAX_PAGES    = 200000
 MAX_PRODUCTS = 999999
-RETAIN_DAYS  = 7                     # Gnadenfrist
+RETAIN_DAYS  = 14
 CACHE_PATH   = Path("products_seen.json")
 
-RE_ITEM_PATH     = re.compile(r"^/shop/item/\d{9,13}/", re.I)
-RE_ISBN_TAIL     = re.compile(r"/[a-z0-9-]+-\d{10,13}$", re.I)
-RE_CAT_ISBN_TAIL = re.compile(r"^/[^/]+/[a-z0-9-]+-\d{10,13}$", re.I)
-RE_CANONICAL_TAG = re.compile(rb'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', re.I)
+# --- Produkt-URL-Muster ---
+RE_ITEM_PATH      = re.compile(r"^/shop/item/\d{9,13}/", re.I)              # falls vorhanden
+RE_ISBN_TAIL      = re.compile(r"^/[a-z0-9-]+-\d{10,13}$", re.I)            # /slug-978...
+RE_CAT_ISBN_TAIL  = re.compile(r"^/[^/]+/[a-z0-9-]+-\d{10,13}$", re.I)      # /buecher/slug-978...
+RE_ISBN_ONLY      = re.compile(r"^/\d{10,13}$")                              # /978..., nur Ziffern (10–13)
+RE_CANONICAL_TAG  = re.compile(rb'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']', re.I)
 
 def fetch(url) -> Tuple[int, str, bytes, Dict[str,str]]:
     p = urllib.parse.urlsplit(url)
@@ -80,8 +85,14 @@ def extract_links(content: bytes) -> Set[str]:
         return set()
 
 def looks_like_product(url_path: str, content: bytes) -> bool:
-    if RE_ITEM_PATH.search(url_path) or RE_CAT_ISBN_TAIL.search(url_path) or RE_ISBN_TAIL.search(url_path):
+    # Explizite Muster zuerst
+    if (RE_ITEM_PATH.search(url_path) or
+        RE_ISBN_TAIL.fullmatch(url_path) or
+        RE_CAT_ISBN_TAIL.fullmatch(url_path) or
+        RE_ISBN_ONLY.fullmatch(url_path)):
         return True
+
+    # Fallback über Inhalt
     try:
         text = content.decode("utf-8","ignore")
     except Exception:
@@ -124,18 +135,6 @@ def save_cache(cache: Dict[str, Dict]):
 
 def iso_today() -> str:
     return datetime.date.today().isoformat()
-
-def parse_last_modified(headers: Dict[str,str]) -> str:
-    lm = headers.get("last-modified")
-    if not lm:
-        return ""
-    try:
-        # http date -> iso date
-        from email.utils import parsedate_to_datetime
-        dt = parsedate_to_datetime(lm)
-        return dt.date().isoformat()
-    except Exception:
-        return ""
 
 def crawl(start: str):
     q = deque([start])
@@ -229,40 +228,40 @@ def ensure_index_has_products(index_path="sitemap_index.xml", product_files=None
         f.write("\n".join(lines))
 
 if __name__ == "__main__":
-    # 1) Vorherige Daten laden
-    cache = load_cache()  # {url: {"last_seen": "YYYY-MM-DD", "lastmod": "YYYY-MM-DD"}}
+    # Cache laden
+    try:
+        cache = json.loads(Path("products_seen.json").read_text(encoding="utf-8"))
+    except Exception:
+        cache = {}
 
-    # 2) Crawlen & aktuelle Treffer
+    # Crawlen
     current = crawl(START_URL)
     today = iso_today()
 
-    # 3) Cache aktualisieren
+    # Cache aktualisieren (last_seen / lastmod)
     for u in current:
-        # Optional Last-Modified Header holen (HEAD-Request sparen wir uns; wir haben ihn aus GET)
-        # Für Einfachheit: lastmod = last_seen; wer will, kann fetch-Header zwischenspeichern.
         entry = cache.get(u, {})
         entry["last_seen"] = today
-        # Wenn du echte Last-Modified-Daten willst, musst du sie in crawl()/fetch() sammeln und hier setzen.
         entry.setdefault("lastmod", today)
         cache[u] = entry
 
-    # 4) Veraltete entfernen (älter als RETAIN_DAYS nicht mehr gesehen)
-    keep: Dict[str, Dict] = {}
-    for u, meta in cache.items():
-        ls = meta.get("last_seen", "")
-        if age_days(ls) <= RETAIN_DAYS:
-            keep[u] = meta
-    cache = keep
+    # Alte raus, die länger als RETAIN_DAYS nicht gesehen wurden
+    def age_days(date_iso: str) -> int:
+        try:
+            d = datetime.date.fromisoformat(date_iso)
+        except Exception:
+            return 9999
+        return (datetime.date.today() - d).days
 
-    # 5) Ausgabemenge vorbereiten
+    cache = {u: m for u, m in cache.items() if age_days(m.get("last_seen","1970-01-01")) <= RETAIN_DAYS}
+
+    # Ausgabe
     urls = sorted(cache.keys())
-    lastmods = {u: cache[u].get("lastmod") or cache[u].get("last_seen", today) for u in urls}
-
-    # 6) Schreiben & Index aktualisieren
+    lastmods = {u: cache[u].get("lastmod", today) for u in urls}
     files = write_sitemaps(urls, lastmods, base_name="sitemap_products", max_urls=45000)
     ensure_index_has_products(product_files=[Path(p).name for p in files])
 
-    # 7) Cache speichern
-    save_cache(cache)
+    # Cache speichern
+    Path("products_seen.json").write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"Products in cache: {len(urls)}; Files: {', '.join(files)}")
