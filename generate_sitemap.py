@@ -21,7 +21,7 @@ def fetch(u):
     if p.query: path += "?"+p.query
     conn.request("GET", path, headers={"User-Agent": UA})
     r = conn.getresponse(); body = r.read()
-    st, ct = r.status, r.getheader("Content-Type","")
+    st, ct = r.status, r.getheader("Content-Type","") or ""
     conn.close()
     return st, ct, body
 
@@ -72,7 +72,6 @@ def write_urlset(urls, path):
 
 if __name__=="__main__":
     urls = crawl(START_URL)
-    # Sicherstellen, dass Pflichtseiten drin sind
     must = [
         "https://www.kellereiladen.de/",
         "https://www.kellereiladen.de/UeberUns",
