@@ -1,0 +1,11 @@
+{
+  "name": "kellereiladen-sitemaps",
+  "private": true,
+  "dependencies": {
+    "puppeteer": "^22.9.0",
+    "robots-parser": "^3.0.1"
+  },
+  "scripts": {
+    "build:sitemap": "node generate_sitemap_products_headless.js"
+  }
+}
