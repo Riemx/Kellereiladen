@@ -7,7 +7,7 @@ const START_DOMAIN = "https://www.kellereiladen.de";
 const HOST = "www.kellereiladen.de";
 const USER_AGENT = "KellereiladenSitemapBot/1.0 (+https://sitemap.kellereiladen.de)";
 
-const MAX_DEPTH = 5;
+const MAX_DEPTH = 6;              // tiefer, um SPA-Routen zu erwischen
 const CONCURRENCY = 2;
 const WAIT_AFTER_LOAD = 900;
 const CRAWL_DELAY = 250;
@@ -17,10 +17,12 @@ const INDEX_FILE = "sitemap_index.xml";
 const PRODUCTS_CACHE = "products_seen.json";
 const RETAIN_DAYS = 14;
 
-// Produkt-URL-Muster
-const RE_ISBN_END  = new RegExp(`^https?://${HOST}/[^?#]*-\\d{10,13}(?:[/?#]|$)`, "i"); // /slug-978...
-const RE_ISBN_ONLY = new RegExp(`^https?://${HOST}/\\d{10,13}(?:[/?#]|$)`, "i");          // /978...
-const RE_ITEM_PATH = new RegExp(`^https?://${HOST}/shop/item/\\d{9,13}/`, "i");          // optional
+// Produkt-URL-Muster & ISBN
+const RE_ISBN_END  = new RegExp(`^https?://${HOST}/[^?#]*-\\d{13}(?:[/?#]|$)`, "i"); // /slug-978...
+const RE_ISBN_ONLY = new RegExp(`^https?://${HOST}/\\d{13}(?:[/?#]|$)`, "i");         // /978...
+const RE_ITEM_PATH = new RegExp(`^https?://${HOST}/shop/item/\\d{9,13}/`, "i");       // optional
+const RE_ISBN13    = /\b97[89]\d{10}\b/g;                                             // 13-stellig, 978/979
+
 const ALLOW_SEED = [/^https?:\/\/www\.kellereiladen\.de\/buecher/i];
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -42,6 +44,11 @@ function parseSeedsFromCategoriesSitemap() {
 
 function looksLikeProduct(url) {
   return RE_ISBN_END.test(url) || RE_ISBN_ONLY.test(url) || RE_ITEM_PATH.test(url);
+}
+
+function toProductUrlFromIsbn(isbn) {
+  // sicher: Root-ISBN-Route existiert (z.B. /9783498007706)
+  return `https://${HOST}/${isbn}`;
 }
 
 function chunk(arr, size) {
@@ -109,28 +116,18 @@ async function fetchRobots() {
   }
 }
 
-// Cookie-Banner klicken (häufige Texte/Selektoren)
 async function acceptCookies(page) {
   const texts = ["alle akzeptieren","akzeptieren","zustimmen","einverstanden","ich stimme zu"];
   try {
     await page.waitForTimeout(500);
     const clicked = await page.evaluate((texts) => {
-      const candidates = [
-        ...document.querySelectorAll('button, [role="button"], .cookie, .consent, .cc-allow, .accept'),
-      ];
+      const candidates = [...document.querySelectorAll('button, [role="button"]')];
       for (const el of candidates) {
         const t = (el.textContent || "").toLowerCase();
-        if (texts.some((x) => t.includes(x))) {
-          el.click();
-          return true;
-        }
+        if (texts.some((x) => t.includes(x))) { el.click(); return true; }
       }
-      // Fallback: bekannte IDs/Klassen
-      const sel = ['#onetrust-accept-btn-handler', '.ot-pc-refuse-all-handler', '.js-accept-cookies'];
-      for (const s of sel) {
-        const e = document.querySelector(s);
-        if (e) { e.click(); return true; }
-      }
+      const sel = ['#onetrust-accept-btn-handler', '.js-accept-cookies', '.ot-pc-refuse-all-handler'];
+      for (const s of sel) { const e = document.querySelector(s); if (e) { e.click(); return true; } }
       return false;
     }, texts);
     if (clicked) await page.waitForTimeout(600);
@@ -138,7 +135,6 @@ async function acceptCookies(page) {
 }
 
 async function expandAndScroll(page) {
-  // "Mehr anzeigen" mehrfach
   for (let i = 0; i < 6; i++) {
     const clicked = await page.$$eval("button", (btns) => {
       let did = false;
@@ -151,7 +147,6 @@ async function expandAndScroll(page) {
     if (!clicked) break;
     await page.waitForTimeout(700);
   }
-  // Lazy-Load/Infinite-Scroll
   for (let i = 0; i < 16; i++) {
     await page.evaluate(() => window.scrollBy(0, document.body.scrollHeight));
     await page.waitForTimeout(500);
@@ -164,21 +159,20 @@ function isInternal(url) {
   catch { return false; }
 }
 
-function harvestFromHtml(html) {
-  // Regex zieht auch URLs, die nicht als <a> vorliegen
-  const re = new RegExp(`https?:\/\/${HOST}\/[^\\s"'<>]*?\\d{10,13}[^\\s"'<>]*`, "ig");
-  return Array.from(new Set((html.match(re) || []).map((u) => u.split("#")[0].split("?")[0])));
+function harvestIsbnsFromText(text) {
+  const set = new Set();
+  for (const m of text.matchAll(RE_ISBN13)) set.add(m[0]);
+  return Array.from(set);
 }
 
-async function harvestNextJson(page) {
-  // Falls Next.js: __NEXT_DATA__
-  try {
-    const data = await page.$eval('#__NEXT_DATA__', el => el.textContent);
-    const links = new Set();
-    const re = new RegExp(`https?:\/\/${HOST}\/[^\\s"'<>]*?\\d{10,13}[^\\s"'<>]*`, "ig");
-    for (const m of (data.match(re) || [])) links.add(m.split("#")[0].split("?")[0]);
-    return Array.from(links);
-  } catch { return []; }
+function harvestProductUrlsFromHtml(html) {
+  const urls = new Set();
+  // echte Links
+  const urlRegex = new RegExp(`https?:\/\/${HOST}\/[^\\s"'<>]*?\\d{13}[^\\s"'<>]*`, "ig");
+  for (const m of html.matchAll(urlRegex)) urls.add(m[0].split("#")[0].split("?")[0]);
+  // nackte ISBN -> /978...
+  for (const isbn of harvestIsbnsFromText(html)) urls.add(toProductUrlFromIsbn(isbn));
+  return Array.from(urls);
 }
 
 async function main() {
@@ -216,34 +210,55 @@ async function main() {
           req.continue();
         });
 
+        // **XHR/JSON sniffen**: ISBNs & Produkt-URLs direkt aus Responses ziehen
+        const sniffedUrls = new Set();
+        const sniffedIsbns = new Set();
+        page.on("response", async (res) => {
+          try {
+            const req = res.request();
+            // nur XHR/Fetch/Document
+            const type = req.resourceType();
+            if (!["xhr","fetch","document"].includes(type)) return;
+            const ct = res.headers()["content-type"] || "";
+            if (!/json|html|text/i.test(ct)) return;
+
+            const body = await res.text();
+            // 1) URLs mit ISBN
+            for (const u of harvestProductUrlsFromHtml(body)) sniffedUrls.add(u);
+            // 2) nackte ISBNs -> /978...
+            for (const isbn of harvestIsbnsFromText(body)) sniffedIsbns.add(isbn);
+          } catch (_) {}
+        });
+
         await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
         await acceptCookies(page);
         await expandAndScroll(page);
 
-        // 1) Normale <a>-Links
+        // DOM-Links + HTML-Quelle
         const hrefs = await page.$$eval("a[href]", (as) => as.map((a) => a.href).filter(Boolean));
-
-        // 2) HTML-Quelle per Regex
         const html = await page.content();
-        const rx = harvestFromHtml(html);
+        const htmlUrls = harvestProductUrlsFromHtml(html);
 
-        // 3) Optional Next.js JSON
-        const nx = await harvestNextJson(page);
+        // alles zusammenführen
+        const allCandidates = new Set([
+          ...hrefs.map((h) => h.split("#")[0].split("?")[0]),
+          ...htmlUrls,
+          ...Array.from(sniffedUrls),
+          ...Array.from(sniffedIsbns).map(toProductUrlFromIsbn),
+        ]);
 
-        const allLinks = Array.from(new Set([...hrefs, ...rx, ...nx]));
-
-        for (const h of allLinks) {
+        for (const h of allCandidates) {
           if (!isInternal(h)) continue;
           const clean = h.split("#")[0].split("?")[0];
           if (looksLikeProduct(clean)) products.add(clean);
         }
 
-        // Pagination / weitere Kategoriepfade
+        // Pagination + weitere Kategoriepfade
         const nexts = await page.$$eval('a[rel="next"]', (as) => as.map((a) => a.href).filter(Boolean));
         for (const n of nexts) if (isInternal(n)) queue.push({ url: n, depth: depth + 1 });
-        for (const h of allLinks) {
+        for (const h of hrefs) {
           if (isInternal(h) && /^https?:\/\/www\.kellereiladen\.de\/buecher/i.test(h)) {
-            queue.push({ url: h, depth: depth + 1 });
+            queue.push({ url: h.split("#")[0], depth: depth + 1 });
           }
         }
 
@@ -282,7 +297,7 @@ async function main() {
   const urls = Object.keys(cache).sort();
   const lastmods = Object.fromEntries(urls.map((u) => [u, cache[u].lastmod || cache[u].last_seen || todayStr]));
 
-  // Immer mindestens eine Datei schreiben (zur Kontrolle)
+  // immer mindestens eine Datei schreiben
   const files = [];
   const chunks = chunk(urls.length ? urls : [START_DOMAIN], CHUNK_SIZE);
   chunks.forEach((arr, i) => {
