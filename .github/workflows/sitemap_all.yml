@@ -1,7 +1,7 @@
 name: Update ALL sitemaps
 on:
   schedule:
-    - cron: "0 0 * * *"      # täglich 00:00 UTC
+    - cron: "15 3 * * *"      # täglich 03:15 UTC
   workflow_dispatch:
 
 permissions:
@@ -14,6 +14,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      SITEMAP_BASE: https://sitemap.kellereiladen.de   # ggf. anpassen (Custom Domain der Sitemaps)
+
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +32,7 @@ jobs:
         run: |
           python generate_sitemap.py
 
-      # 2) PRODUKT-SITEMAPS (Headless)
+      # 2) PRODUKT-SITEMAPS (Headless, Stealth)
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
