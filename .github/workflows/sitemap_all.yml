@@ -15,7 +15,14 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      SITEMAP_BASE: https://sitemap.kellereiladen.de   # ggf. anpassen (Custom Domain der Sitemaps)
+      SITEMAP_BASE: https://sitemap.kellereiladen.de
+
+      # Aggressives Finetuning (von generate_sitemap_products_headless.js gelesen)
+      KL_RETAIN_DAYS: "35"           # Produkte 35 Tage im Cache halten
+      KL_REFRESH_AFTER_DAYS: "7"     # ab Tag 7 refreshtesten (HEAD/GET)
+      KL_RESPECT_ROBOTS: "0"         # "1" = robots.txt strikt, "0" = ignorieren
+      KL_REFRESH_CONCURRENCY: "10"   # parallele HEAD/GET Checks
+      KL_REFRESH_TIMEOUT_MS: "15000" # Timeout pro Check (ms)
 
     steps:
       - uses: actions/checkout@v4
@@ -49,3 +56,4 @@ jobs:
           git add sitemap*.xml products_seen.json || true
           git commit -m "auto: refresh all sitemaps" || echo "No changes"
           git push
+
