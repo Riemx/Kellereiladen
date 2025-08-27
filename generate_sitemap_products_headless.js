@@ -310,8 +310,10 @@ async function headOrGet(url) {
 
 async function refreshStaleProducts(cache, todayStr) {
   const entries = Object.entries(cache);
+  const forceAll = /^(1|true|yes)$/i.test(process.env.KL_FORCE_REFRESH_ALL || "0");
   const stale = entries
     .filter(([u, meta]) => {
+      if (forceAll) return true; // ALLES refreshtesten
       const ls = meta.last_seen || "1970-01-01";
       const age = daysBetween(ls, todayStr);
       return age >= REFRESH_AFTER_DAYS && age < RETAIN_DAYS;
