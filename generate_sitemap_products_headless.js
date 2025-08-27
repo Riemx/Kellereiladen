@@ -29,6 +29,7 @@ const REFRESH_AFTER_DAYS = Number(process.env.KL_REFRESH_AFTER_DAYS || 10);
 const REFRESH_CONCURRENCY = Number(process.env.KL_REFRESH_CONCURRENCY || 6);
 const REFRESH_TIMEOUT_MS = Number(process.env.KL_REFRESH_TIMEOUT_MS || 12000);
 const RESPECT_ROBOTS = /^(1|true|yes)$/i.test(process.env.KL_RESPECT_ROBOTS || "false");
+const FORCE_REFRESH_ALL = /^(1|true|yes)$/i.test(process.env.KL_FORCE_REFRESH_ALL || "0");
 
 // Basis-URL für Index (aus Workflow-ENV)
 const BASE = process.env.SITEMAP_BASE || "https://sitemap.kellereiladen.de";
@@ -38,32 +39,19 @@ const ALLOW_SEED = [/^https?:\/\/www\.kellereiladen\.de\/buecher/i];
 
 // Produktmuster/ISBN
 const RE_ISBN13 = /\b97[89]\d{10}\b/g;
-const RE_PROD_END = new RegExp(
-  `^https?://${HOST}/[^?#]*-\\d{13}(?:[/?#]|$)`,
-  "i"
-);
-const RE_PROD_ONLY = new RegExp(
-  `^https?://${HOST}/\\d{13}(?:[/?#]|$)`,
-  "i"
-);
-const RE_ITEM_PATH = new RegExp(
-  `^https?://${HOST}/shop/item/\\d{9,13}/`,
-  "i"
-);
+const RE_PROD_END = new RegExp(`^https?://${HOST}/[^?#]*-\\d{13}(?:[/?#]|$)`,"i");
+const RE_PROD_ONLY = new RegExp(`^https?://${HOST}/\\d{13}(?:[/?#]|$)`,"i");
+const RE_ITEM_PATH = new RegExp(`^https?://${HOST}/shop/item/\\d{9,13}/`,"i");
 
 // ======= Utils =======
 const today = () => new Date().toISOString().slice(0, 10);
-const sleep = (ms) =>
-  new Promise((r) => setTimeout(r, ms + Math.floor(Math.random() * 120))); // kleiner Jitter
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms + Math.floor(Math.random() * 120))); // kleiner Jitter
+const daysBetween = (a, b) => Math.round((new Date(b) - new Date(a)) / (1000*60*60*24));
 
 function looksLikeProduct(url) {
-  return (
-    RE_PROD_END.test(url) || RE_PROD_ONLY.test(url) || RE_ITEM_PATH.test(url)
-  );
+  return RE_PROD_END.test(url) || RE_PROD_ONLY.test(url) || RE_ITEM_PATH.test(url);
 }
-function toProductUrlFromIsbn(isbn) {
-  return `https://${HOST}/${isbn}`;
-}
+function toProductUrlFromIsbn(isbn) { return `https://${HOST}/${isbn}`; }
 
 function parseSeedsFromCategoriesSitemap() {
   try {
@@ -82,12 +70,8 @@ function parseSeedsFromCategoriesSitemap() {
 }
 
 function isInternal(url) {
-  try {
-    const u = new URL(url);
-    return u.hostname === HOST && /^https?:$/.test(u.protocol);
-  } catch {
-    return false;
-  }
+  try { const u = new URL(url); return u.hostname === HOST && /^https?:$/.test(u.protocol); }
+  catch { return false; }
 }
 
 function chunk(arr, size) {
@@ -99,33 +83,21 @@ function chunk(arr, size) {
 function buildUrlset(urls, lastmods) {
   const lm = (u) => (lastmods[u] ? lastmods[u] : today());
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${
-    urls
-      .map(
-        (u) =>
-          `  <url>\n    <loc>${u}</loc>\n    <lastmod>${lm(
-            u
-          )}</lastmod>\n  </url>`
-      )
-      .join("\n")
+    urls.map((u) => `  <url>\n    <loc>${u}</loc>\n    <lastmod>${lm(u)}</lastmod>\n  </url>`).join("\n")
   }\n</urlset>\n`;
 }
 
 // Index IMMER frisch schreiben (Basis + alle vorhandenen product-XMLs)
 function writeFreshIndex() {
   const todayStr = today();
-  const productFiles = fs
-    .readdirSync(".")
-    .filter((f) => /^sitemap_products.*\.xml$/i.test(f))
-    .sort((a, b) => a.localeCompare(b, "en"));
+  const productFiles = fs.readdirSync(".").filter((f) => /^sitemap_products.*\.xml$/i.test(f)).sort((a, b) => a.localeCompare(b, "en"));
   const lines = [
     `<?xml version="1.0" encoding="UTF-8"?>`,
     `<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`,
     `  <sitemap><loc>${BASE}/sitemap.xml</loc><lastmod>${todayStr}</lastmod></sitemap>`,
     `  <sitemap><loc>${BASE}/sitemap_categories.xml</loc><lastmod>${todayStr}</lastmod></sitemap>`,
     `  <sitemap><loc>${BASE}/sitemap_auto.xml</loc><lastmod>${todayStr}</lastmod></sitemap>`,
-    ...productFiles.map(
-      (f) => `  <sitemap><loc>${BASE}/${f}</loc><lastmod>${todayStr}</lastmod></sitemap>`
-    ),
+    ...productFiles.map((f) => `  <sitemap><loc>${BASE}/${f}</loc><lastmod>${todayStr}</lastmod></sitemap>`),
     `</sitemapindex>`,
   ];
   fs.writeFileSync("sitemap_index.xml", lines.join("\n"), "utf-8");
@@ -133,9 +105,7 @@ function writeFreshIndex() {
 
 async function fetchRobots() {
   try {
-    const res = await fetch(`${START_DOMAIN}/robots.txt`, {
-      headers: { "User-Agent": UA },
-    });
+    const res = await fetch(`${START_DOMAIN}/robots.txt`, { headers: { "User-Agent": UA } });
     const txt = await res.text();
     return robotsParser(`${START_DOMAIN}/robots.txt`, txt);
   } catch {
@@ -151,23 +121,10 @@ async function acceptCookies(page) {
       const btns = [...document.querySelectorAll('button,[role="button"]')];
       for (const el of btns) {
         const t = (el.textContent || "").toLowerCase();
-        if (texts.some((x) => t.includes(x))) {
-          el.click();
-          return true;
-        }
+        if (texts.some((x) => t.includes(x))) { el.click(); return true; }
       }
-      const sel = [
-        "#onetrust-accept-btn-handler",
-        ".js-accept-cookies",
-        ".ot-pc-refuse-all-handler",
-      ];
-      for (const s of sel) {
-        const e = document.querySelector(s);
-        if (e) {
-          e.click();
-          return true;
-        }
-      }
+      const sel = ["#onetrust-accept-btn-handler",".js-accept-cookies",".ot-pc-refuse-all-handler"];
+      for (const s of sel) { const e = document.querySelector(s); if (e) { e.click(); return true; } }
       return false;
     }, texts);
     if (clicked) await page.waitForTimeout(800);
@@ -180,20 +137,14 @@ async function expandAndScroll(page) {
       let clicked = false;
       for (const b of btns) {
         const t = (b.textContent || "").toLowerCase().trim();
-        if (t.includes("mehr laden") || t.includes("mehr anzeigen")) {
-          b.click();
-          clicked = true;
-        }
+        if (t.includes("mehr laden") || t.includes("mehr anzeigen")) { b.click(); clicked = true; }
       }
       return clicked;
     });
     await page.waitForTimeout(800);
     if (!did) break;
   }
-  for (let i = 0; i < 20; i++) {
-    await page.evaluate(() => window.scrollBy(0, document.body.scrollHeight));
-    await page.waitForTimeout(400);
-  }
+  for (let i = 0; i < 20; i++) { await page.evaluate(() => window.scrollBy(0, document.body.scrollHeight)); await page.waitForTimeout(400); }
   await page.waitForTimeout(WAIT_AFTER_LOAD);
 }
 
@@ -205,55 +156,34 @@ function harvestIsbnsFromText(text) {
 
 function harvestProductUrlsFromHtml(html) {
   const urls = new Set();
-  const reUrl = new RegExp(
-    `https?:\/\/${HOST}\/[^\\s"'<>]*?\\d{13}[^\\s"'<>]*`,
-    "ig"
-  );
-  for (const m of html.matchAll(reUrl))
-    urls.add(m[0].split("#")[0].split("?")[0]);
-  for (const isbn of harvestIsbnsFromText(html))
-    urls.add(toProductUrlFromIsbn(isbn));
+  const reUrl = new RegExp(`https?:\/\/${HOST}\/[^\\s"'<>]*?\\d{13}[^\\s"'<>]*`,"ig");
+  for (const m of html.matchAll(reUrl)) urls.add(m[0].split("#")[0].split("?")[0]);
+  for (const isbn of harvestIsbnsFromText(html)) urls.add(toProductUrlFromIsbn(isbn));
   return Array.from(urls);
 }
 
 async function trySearchHarvest(page) {
-  const queries = ["a", "e", "i", "o", "u", "der", "die", "das"];
+  const queries = ["a","e","i","o","u","der","die","das"];
   const found = new Set();
   for (const q of queries) {
     try {
       const ok = await page.evaluate(() => {
-        const sel = [
-          'input[type="search"]',
-          'input[placeholder*="Suche" i]',
-          'input[name*="search" i]',
-          "#search",
-        ];
-        for (const s of sel) {
-          const el = document.querySelector(s);
-          if (el) {
-            el.focus();
-            return true;
-          }
-        }
+        const sel = ['input[type="search"]','input[placeholder*="Suche" i]','input[name*="search" i]','#search'];
+        for (const s of sel) { const el = document.querySelector(s); if (el) { el.focus(); return true; } }
         return false;
       });
       if (!ok) break;
 
-      await page.keyboard.down("Control");
-      await page.keyboard.press("KeyA");
-      await page.keyboard.up("Control");
+      await page.keyboard.down("Control"); await page.keyboard.press("KeyA"); await page.keyboard.up("Control");
       await page.keyboard.type(q, { delay: 50 });
       await page.keyboard.press("Enter");
       await page.waitForNetworkIdle({ idleTime: 800, timeout: 30000 });
       await expandAndScroll(page);
 
-      const hrefs = await page.$$eval("a[href]", (as) =>
-        as.map((a) => a.href).filter(Boolean)
-      );
+      const hrefs = await page.$$eval("a[href]", (as) => as.map((a) => a.href).filter(Boolean));
       for (const h of hrefs) {
         const clean = h.split("#")[0].split("?")[0];
-        if (clean.includes("/978") || clean.match(/-97[89]\d{10}\b/))
-          found.add(clean);
+        if (clean.includes("/978") || clean.match(/-97[89]\d{10}\b/)) found.add(clean);
       }
       const html = await page.content();
       for (const u of harvestProductUrlsFromHtml(html)) found.add(u);
@@ -263,10 +193,6 @@ async function trySearchHarvest(page) {
 }
 
 // ======= Refresh (HEAD/GET) =======
-function daysBetween(a, b) {
-  return Math.round((new Date(b) - new Date(a)) / (1000 * 60 * 60 * 24));
-}
-
 async function headOrGet(url) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), REFRESH_TIMEOUT_MS);
@@ -278,29 +204,16 @@ async function headOrGet(url) {
       headers: { "User-Agent": UA, "Accept-Language": "de-DE,de;q=0.9,en;q=0.8" },
       signal: ctrl.signal,
     });
-    if (res.ok)
-      return {
-        ok: true,
-        status: res.status,
-        lastModified: res.headers.get("last-modified") || "",
-      };
+    if (res.ok) return { ok: true, status: res.status, lastModified: res.headers.get("last-modified") || "" };
 
-    // Fallback GET (manche Server blocken HEAD)
+    // GET Fallback
     res = await fetch(url, {
       method: "GET",
       redirect: "follow",
-      headers: {
-        "User-Agent": UA,
-        Accept: "text/html,*/*;q=0.1",
-        "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-      },
+      headers: { "User-Agent": UA, "Accept": "text/html,*/*;q=0.1", "Accept-Language": "de-DE,de;q=0.9,en;q=0.8" },
       signal: ctrl.signal,
     });
-    return {
-      ok: res.ok,
-      status: res.status,
-      lastModified: res.headers.get("last-modified") || "",
-    };
+    return { ok: res.ok, status: res.status, lastModified: res.headers.get("last-modified") || "" };
   } catch (e) {
     return { ok: false, status: 0, lastModified: "" };
   } finally {
@@ -310,25 +223,35 @@ async function headOrGet(url) {
 
 async function refreshStaleProducts(cache, todayStr) {
   const entries = Object.entries(cache);
-  const forceAll = /^(1|true|yes)$/i.test(process.env.KL_FORCE_REFRESH_ALL || "0");
-  const stale = entries
-    .filter(([u, meta]) => {
-      if (forceAll) return true; // ALLES refreshtesten
-      const ls = meta.last_seen || "1970-01-01";
-      const age = daysBetween(ls, todayStr);
-      return age >= REFRESH_AFTER_DAYS && age < RETAIN_DAYS;
-    })
-    .map(([u]) => u);
+  const forceAll = FORCE_REFRESH_ALL;
+  const staleEntries = entries.filter(([u, meta]) => {
+    if (forceAll) return true;
+    const ls = meta.last_seen || "1970-01-01";
+    const age = daysBetween(ls, todayStr);
+    return age >= REFRESH_AFTER_DAYS && age < RETAIN_DAYS;
+  });
+  const stale = staleEntries.map(([u]) => u);
+
+  console.log(`[refresh] cacheSize=${entries.length} forceAll=${forceAll} candidates=${stale.length}`);
+  if (stale.length) {
+    console.log(`[refresh] sample:`, stale.slice(0,5));
+  }
 
   if (!stale.length) return 0;
 
-  let idx = 0,
-    alive = 0;
+  let idx = 0, alive = 0, tried = 0;
   async function worker() {
     while (idx < stale.length) {
       const u = stale[idx++];
-      const res = await headOrGet(u);
+      tried++;
+      // kleine Retry-Schleife
+      let res = await headOrGet(u);
+      if (!res.ok) {
+        await sleep(150);
+        res = await headOrGet(u);
+      }
       if (res.ok) {
+        cache[u] = cache[u] || {};
         cache[u].last_seen = todayStr;
         if (res.lastModified) {
           const d = new Date(res.lastModified);
@@ -336,16 +259,18 @@ async function refreshStaleProducts(cache, todayStr) {
         }
         alive++;
       }
-      await sleep(100);
+      await sleep(60);
     }
   }
   const workers = Array.from({ length: REFRESH_CONCURRENCY }, () => worker());
   await Promise.all(workers);
+  console.log(`[refresh] done tried=${tried} refreshed=${alive}`);
   return alive;
 }
 
 // ======= Main =======
 async function main() {
+  console.log(`[env] RETAIN_DAYS=${RETAIN_DAYS} REFRESH_AFTER_DAYS=${REFRESH_AFTER_DAYS} CONC=${REFRESH_CONCURRENCY} TMO=${REFRESH_TIMEOUT_MS}ms FORCE_ALL=${FORCE_REFRESH_ALL}`);
   const robots = await fetchRobots();
   const seeds = parseSeedsFromCategoriesSitemap();
   const queue = [];
@@ -355,18 +280,11 @@ async function main() {
 
   const browser = await puppeteer.launch({
     headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--incognito",
-      "--disable-blink-features=AutomationControlled",
-    ],
+    args: ["--no-sandbox","--disable-setuid-sandbox","--disable-dev-shm-usage","--incognito","--disable-blink-features=AutomationControlled"],
   });
   const context = await browser.createBrowserContext();
 
-  let processed = 0,
-    stop = false;
+  let processed = 0, stop = false;
 
   async function worker() {
     while (queue.length && !stop) {
@@ -380,28 +298,20 @@ async function main() {
       try {
         await page.setUserAgent(UA);
         await page.setViewport({ width: 1366, height: 900 });
-        await page.setExtraHTTPHeaders({
-          "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-        });
+        await page.setExtraHTTPHeaders({ "Accept-Language": "de-DE,de;q=0.9,en;q=0.8" });
         await page.setRequestInterception(true);
-        page.on("request", (req) => {
-          const t = req.resourceType();
-          if (["image", "media", "font"].includes(t)) return req.abort();
-          req.continue();
-        });
+        page.on("request", (req) => { const t = req.resourceType(); if (["image","media","font"].includes(t)) return req.abort(); req.continue(); });
 
         // XHR/HTML sniffen
         page.on("response", async (res) => {
           try {
-            const req = res.request();
-            const type = req.resourceType();
-            if (!["xhr", "fetch", "document"].includes(type)) return;
+            const req = res.request(); const type = req.resourceType();
+            if (!["xhr","fetch","document"].includes(type)) return;
             const ct = res.headers()["content-type"] || "";
             if (!/json|html|text/i.test(ct)) return;
             const body = await res.text();
             for (const u of harvestProductUrlsFromHtml(body)) {
-              if (isInternal(u))
-                products.add(u.split("#")[0].split("?")[0]);
+              if (isInternal(u)) products.add(u.split("#")[0].split("?")[0]);
             }
           } catch {}
         });
@@ -411,16 +321,11 @@ async function main() {
         await expandAndScroll(page);
 
         // DOM-Links
-        const hrefs = await page.$$eval("a[href]", (as) =>
-          as.map((a) => a.href).filter(Boolean)
-        );
+        const hrefs = await page.$$eval("a[href]", (as) => as.map((a) => a.href).filter(Boolean));
         for (const h of hrefs) {
           const clean = h.split("#")[0].split("?")[0];
           if (isInternal(clean) && looksLikeProduct(clean)) products.add(clean);
-          if (
-            isInternal(clean) &&
-            /^https?:\/\/www\.kellereiladen\.de\/buecher/i.test(clean)
-          ) {
+          if (isInternal(clean) && /^https?:\/\/www\.kellereiladen\.de\/buecher/i.test(clean)) {
             queue.push({ url: clean, depth: depth + 1 });
           }
         }
@@ -430,35 +335,31 @@ async function main() {
           const more = await trySearchHarvest(page);
           for (const u of more) {
             const clean = u.split("#")[0].split("?")[0];
-            if (isInternal(clean) && looksLikeProduct(clean))
-              products.add(clean);
+            if (isInternal(clean) && looksLikeProduct(clean)) products.add(clean);
           }
         }
 
         // Pagination
-        const nexts = await page.$$eval('a[rel="next"]', (as) =>
-          as.map((a) => a.href).filter(Boolean)
-        );
+        const nexts = await page.$$eval('a[rel="next"]', (as) => as.map((a) => a.href).filter(Boolean));
         for (const n of nexts) if (isInternal(n)) queue.push({ url: n, depth: depth + 1 });
+
       } catch {} finally {
         await page.close();
-        processed++;
-        if (processed >= MAX_PAGES) stop = true;
+        processed++; if (processed >= MAX_PAGES) stop = true;
         await sleep(CRAWL_DELAY);
       }
     }
   }
 
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
-  await context.close();
-  await browser.close();
+  await context.close(); await browser.close();
 
   // Cache pflegen
   let cache = {};
-  try {
-    cache = JSON.parse(fs.readFileSync(PRODUCTS_CACHE, "utf-8"));
-  } catch {}
+  try { cache = JSON.parse(fs.readFileSync(PRODUCTS_CACHE, "utf-8")); } catch {}
   const todayStr = today();
+
+  console.log(`[cache] loaded entries=${Object.keys(cache).length}`);
 
   // Neue Produkte vom Crawl eintragen
   for (const u of products) {
@@ -466,24 +367,25 @@ async function main() {
     cache[u].last_seen = todayStr;
     cache[u].lastmod = cache[u].lastmod || todayStr;
   }
+  console.log(`[cache] after crawl newProducts=${products.size} total=${Object.keys(cache).length}`);
 
-  // Refresh-Sweep für fast ablaufende Produkte (HEAD/GET)
+  // Refresh-Sweep (stale oder Force-All)
   const refreshed = await refreshStaleProducts(cache, todayStr);
-  console.log(`Refreshed near-stale products: ${refreshed}`);
+  console.log(`[cache] refreshed=${refreshed}`);
 
   // Prune nach RETAIN_DAYS
   const keep = {};
+  let pruned = 0;
   for (const [u, meta] of Object.entries(cache)) {
     const ls = meta.last_seen || "1970-01-01";
-    const age = (new Date(todayStr) - new Date(ls)) / (1000 * 60 * 60 * 24);
-    if (age <= RETAIN_DAYS) keep[u] = meta;
+    const age = (new Date(todayStr) - new Date(ls)) / (1000*60*60*24);
+    if (age <= RETAIN_DAYS) keep[u] = meta; else pruned++;
   }
   cache = keep;
+  console.log(`[cache] pruned=${pruned} kept=${Object.keys(cache).length}`);
 
   const urls = Object.keys(cache).sort();
-  const lastmods = Object.fromEntries(
-    urls.map((u) => [u, cache[u].lastmod || cache[u].last_seen || todayStr])
-  );
+  const lastmods = Object.fromEntries(urls.map((u) => [u, cache[u].lastmod || cache[u].last_seen || todayStr]));
 
   // Sitemaps schreiben (mind. eine Datei)
   const files = [];
@@ -500,10 +402,7 @@ async function main() {
   // Cache speichern
   fs.writeFileSync(PRODUCTS_CACHE, JSON.stringify(cache, null, 2), "utf-8");
 
-  console.log(`Products found: ${urls.length} | Files: ${files.join(", ")}`);
+  console.log(`[done] Products=${urls.length} Files=${files.join(", ")}`);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+main().catch((e) => { console.error(e); process.exit(1); });
